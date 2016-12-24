@@ -136,7 +136,11 @@ class _WorkerThread(threading.Thread):
                     _print('worker [{id}] is working on {task}'.format(id=self.id, task=task.id))
 
                     if self.action(task):
+                        _print('*************set done')
                         task.set_done()
+                    else:
+                        _print('*************set failed')
+                        task.set_failed()
 
                     self.result_out.send_json(task.__dict__)
 
@@ -223,6 +227,13 @@ def start(action, num_workers=3):
     @num_workers Number workers, default 3
     '''
     global _WORKING_THREADS
+    _WORKING_THREADS = []
+
+    global _TASKS
+    _TASKS = {}
+
+    global _TASK_OUT_SOCKET
+    _TASK_OUT_SOCKET = None
 
     # bind worker ack
     ack_in = _CONTEXT.socket(zmq.REP)
@@ -291,8 +302,8 @@ def have_all_tasks_done():
     '''
     _GLOBAL_TASK_LOCK.acquire()
     all_TASKS_done = True
-    for k, v, in _TASKS.items():
-        if not v.is_done():
+    for k, v in _TASKS.items():
+        if not v.is_done() and not v.is_failed():
             all_TASKS_done = False
             break
     _GLOBAL_TASK_LOCK.release()
