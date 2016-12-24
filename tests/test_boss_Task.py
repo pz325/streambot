@@ -5,7 +5,7 @@ import boss
 class TaskTest(unittest.TestCase):
     def test_constructor_default_status(self):
         task = boss.Task(1, {})
-        self.assertEqual(task.status, boss.TaskStatus.START)
+        self.assertEqual(task.status, 'START')
 
     def test_constructor_id(self):
         task_id = 1
@@ -20,9 +20,17 @@ class TaskTest(unittest.TestCase):
     def test_set_done(self):
         task = boss.Task(1, {})
         task.set_done()
-        self.assertEqual(task.status, boss.TaskStatus.DONE)
+        self.assertEqual(task.status, 'DONE')
 
     def test_is_done(self):
-        task = boss.Task(1, {}, boss.TaskStatus.DONE)
+        task = boss.Task(1, {}, 'DONE')
         self.assertTrue(task.is_done())
 
+    def test_set_failed(self):
+        task = boss.Task(1, {})
+        task.set_failed()
+        self.assertEqual(task.status, 'FAILED')
+
+    def teste_is_failed(self):
+        task = boss.Task(1, {}, 'FAILED')
+        self.assertTrue(task.is_failed())

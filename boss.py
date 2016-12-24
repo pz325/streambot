@@ -2,274 +2,344 @@
 boss.py
 
 boss is zeromq based, multi-threading Task distributing framework
+
+Interfaces:
+start()
+stop()
+
+Classes:
+Task
+
+Enum:
+TaskStatus
 '''
 import time
 import zmq
 import uuid
 import threading
 import logging
-import enum
 
 
 logger = logging.getLogger(__name__)
 _CONTEXT = zmq.Context()
 
-# from multiprocessing import Process
-# from multiprocessing import Lock
-# from multiprocessing import Manager
-
 # TODO: handle failed tasks
 
 
-# _GLOBAL_PRINT_LOCK = Lock()
+_GLOBAL_PRINT_LOCK = threading.Lock()
+_GLOBAL_TASK_LOCK = threading.Lock()
 _WORKER_TASK = 'WORKER_TASK'
 _WORKER_RESULT = 'WORKER_RESULT'
 _WORKER_ACK = 'WORKER_ACK'
-_WORKERS = []
+
+_WORKING_THREADS = []   # list of working threads
 
 _TASK_OUT_SOCKET = None  # PUSH socket for dispatching _TASKS to workers
 _TASKS = {}  # All tasks, key: Task.id, value: Task object
 
 
-_TASK_PORT = 5000
-_RESULT_PORT = 5001
-_WORKER_ACK_PORT = 9000
-_PROCESSES = []  # All workers and sinker process
-_TASK_OUT = None  
-_TASKS = None  # All [download] _TASKS. Instance of multiprocessing.Manager.dict()
-
-
-class TaskStatus(enum.Enum):
-    START = 1
-    DONE = 2
+def _print(message, block=True):
+    if block:
+        _GLOBAL_PRINT_LOCK.acquire()
+    print(message)
+    if block:
+        _GLOBAL_PRINT_LOCK.release()
 
 
 class Task(object):
-    def __init__(self, task_id, command, status=TaskStatus.START):
+    def __init__(self, task_id, command, status='START'):
         '''
         @param task_id Unique id for a task
         @param command An object
+
+        'STOP' status reserved for stopping working thread
         '''
         self.id = task_id
         self.command = command
         self.status = status
 
     def set_done(self):
-        self.status = TaskStatus.DONE
+        self.status = 'DONE'
 
     def is_done(self):
-        return TaskStatus.DONE == self.status
+        return 'DONE' == self.status
+
+    def set_failed(self):
+        self.status = 'FAILED'
+
+    def is_failed(self):
+        return 'FAILED' == self.status
 
     def __repr__(self):
         return 'task {id}: stauts {status}'.format(id=self.id, status=self.status)
 
 
-# class WorkerThread(threading.Thread):
-#     '''
-#     boss's worker thread
-#     read Task from task_in socket
-#     send Task result to result_out socket
-#     also sync to client via worker_ack_out socket
-#     action is the Task handler
-#     '''
-#     def __init__(self, action):
-#         threading.Thread.__init__(self)
-#         self.id = uuid.uuid4()
-#         self.task_in = _CONTEXT.socket(zmq.PULL)
-#         self.result_out = _CONTEXT.socket(zmq.REQ)
-#         self.worker_ack_out = _CONTEXT.socket(zmq.REQ)
-#         self.action = action
+class _WorkerThread(threading.Thread):
+    '''
+    boss's worker thread
 
-#     def run(self):
-#         # init sockets
-#         task_in.connect('inproc://{port}'.format(port=_TASK_PORT))
+    read Task from task_in socket, which binds to inproc://WORKER_TASK
+    send Task result to result_out socket, which binds to inproc://WORKER_RESULT
+    also sync to client via worker_ack_out socket, wich binds to inproc://WORKER_ACK
+    also command socket, which binds to inproc://{id}
 
-#         result_out = _CONTEXT.socket(zmq.REQ)
-#         result_out.connect('tcp://localhost:{port}'.format(port=_RESULT_PORT))
+    action is the Task handler: bool(Task)
+    '''
+    def __init__(self, action):
+        '''
+        @param action A function implements "bool (Task)"
+        '''
+        threading.Thread.__init__(self)
+        self.id = uuid.uuid4()
+        self.task_in = _CONTEXT.socket(zmq.PULL)
+        self.result_out = _CONTEXT.socket(zmq.REQ)
+        self.worker_ack_out = _CONTEXT.socket(zmq.REQ)
+        self.command_in = _CONTEXT.socket(zmq.PULL)
+        self.command_out = _CONTEXT.socket(zmq.PUSH)
+        self.command_in.connect('inproc://{id}'.format(id=self.id))
+        self.command_out.bind('inproc://{id}'.format(id=self.id))
+        self.poller = zmq.Poller()
+        self.poller.register(self.command_in, zmq.POLLIN)
+        self.poller.register(self.task_in, zmq.POLLIN)
 
-#         # sync worker to client
-#         worker_ack_out = _CONTEXT.socket(zmq.REQ)
-#         worker_ack_out.connect('tcp://localhost:{port}'.format(port=_WORKER_ACK_PORT))
-#         worker_ack_out.send(b'')
-#         blocking_print('waiting to start worker [{id}]'.format(id=worker_id))
-#         worker_ack_out.recv()  # blocking wait client to response, then start working process
-#         blocking_print('worker [{id}] stats'.format(id=worker_id))
-#         print "Starting " + self.name
-#         print_time(self.name, self.counter, 5)
-#         print "Exiting " + self.name
+        self.action = action
+        _print('create worker [{id}]'.format(id=self.id))
 
-#     def _get_task(self):
+    def run(self):
+        try:
+            # init sockets
+            self.task_in.connect('inproc://{proc_name}'.format(proc_name=_WORKER_TASK))
+            self.result_out.connect('inproc://{proc_name}'.format(proc_name=_WORKER_RESULT))
 
+            # sync worker to boss
+            self.worker_ack_out.connect('inproc://{proc_name}'.format(proc_name=_WORKER_ACK))
+            self.worker_ack_out.send(b'')
+            _print('waiting to start worker [{id}]'.format(id=self.id))
+            self.worker_ack_out.recv()  # blocking wait client to response, then start working process
+            _print('worker [{id}] stats'.format(id=self.id))
 
-# def blocking_print(message):
-#     // _GLOBAL_PRINT_LOCK.acquire()
-#     print(message)
-#     // _GLOBAL_PRINT_LOCK.release()
+            # main working loop
+            while True:
+                _print('worker [{id}] is waiting for task'.format(id=self.id))
+                socks = dict(self.poller.poll())
+                if self.command_in in socks and socks[self.command_in] == zmq.POLLIN:
+                    _print('stop() received')
+                    break
 
+                if self.task_in in socks and socks[self.task_in] == zmq.POLLIN:
+                    task_msg = self.task_in.recv_json()
+                    _print('receive task_msg: {msg}'.format(msg=task_msg))
+                    if 'STOP' == task_msg['status']:
+                        break
 
-# def _worker(action):
-#     worker_id = uuid.uuid4()
-#     blocking_print('create worker [{id}]'.format(id=worker_id))
+                    task = Task(task_msg['id'], task_msg['command'])
+                    _print('worker [{id}] is working on {task}'.format(id=self.id, task=task.id))
 
-#     try:
-#         task_in = _CONTEXT.socket(zmq.PULL)
-#         task_in.connect('tcp://localhost:{port}'.format(port=_TASK_PORT))
+                    if self.action(task):
+                        task.set_done()
 
-#         result_out = _CONTEXT.socket(zmq.REQ)
-#         result_out.connect('tcp://localhost:{port}'.format(port=_RESULT_PORT))
+                    self.result_out.send_json(task.__dict__)
 
-#         # sync worker to client
-#         worker_ack_out = _CONTEXT.socket(zmq.REQ)
-#         worker_ack_out.connect('tcp://localhost:{port}'.format(port=_WORKER_ACK_PORT))
-#         worker_ack_out.send(b'')
-#         blocking_print('waiting to start worker [{id}]'.format(id=worker_id))
-#         worker_ack_out.recv()  # blocking wait client to response, then start working process
-#         blocking_print('worker [{id}] stats'.format(id=worker_id))
+                    _print('worker [{id}] is sending out result'.format(id=self.id))
+                    self.result_out.recv()
+        except Exception as e:
+            _print('worker [{id}] Error: {error}'.format(id=self.id, error=e.strerror))
 
-#         # main working loop
-#         while True:
-#             blocking_print('worker [{id}] is waiting for task'.format(id=worker_id))
-#             task_msg = task_in.recv_json()
-#             blocking_print('receive task_msg: {msg}'.format(msg=task_msg))
-#             task = Task(task_msg['id'], task_msg['command'])
-#             blocking_print('worker [{id}] is working on {task}'.format(id=worker_id, task=task.id))
+    def stop(self):
+        '''
+        properly stopping a _WorkerThread is:
 
-#             if action(task):
-#                 task.set_done()
-
-#             result_out.send_json(task.__dict__)
-
-#             blocking_print('worker [{id}] is sending out result'.format(id=worker_id))
-#             result_out.recv()
-#     except Exception as e:
-#         blocking_print('worker [{id}] Error: {error}'.format(id=worker_id, error=e.strerror))
-
-
-# def _sink(_TASKS):
-#     sink_id = uuid.uuid4()
-#     blocking_print('create sink [{id}]'.format(id=sink_id))
-
-#     try:
-#         result_in = _CONTEXT.socket(zmq.REP)
-#         result_in.bind('tcp://*:{port}'.format(port=_RESULT_PORT))
-
-#         while True:
-#             task_msg = result_in.recv_json()
-#             task = Task(task_msg['id'], task_msg['command'], task_msg['status'])
-#             blocking_print('sink [{id}] received result of task {task_id}'.format(id=sink_id, task_id=task.id))
-#             _TASKS[task.id] = task
-#             # print(_TASKS)
-#             result_in.send(b'')
-#     except Exception as e:
-#         blocking_print('sink [{id}] Error: {error}'.format(id=sink_id, error=e.strerror))
+        worker.stop()
+        worker.join()
+        '''
+        self.command_out.send('STOP')
 
 
-# def start(task_processor, num_workers=4):
-#     global _PROCESSES
-#     global _TASKS
-#     manager = Manager()
-#     _TASKS = manager.dict()
+class _SinkerThread(threading.Thread):
+    '''
+    Sinker thread
 
-#     # create sink
-#     p = Process(target=_sink, args=(_TASKS, ))
-#     _PROCESSES.append(p)
-#     p.start()
+    receive Task result from result_in socket, which binds to inproc://WORKER_RESULT
+    update global _TASKS dict
+    '''
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.id = uuid.uuid4()
+        self.result_in = _CONTEXT.socket(zmq.REP)
+        self.command_in = _CONTEXT.socket(zmq.PULL)
+        self.command_out = _CONTEXT.socket(zmq.PUSH)
+        self.command_in.connect('inproc://{id}'.format(id=self.id))
+        self.command_out.bind('inproc://{id}'.format(id=self.id))
+        self.poller = zmq.Poller()
+        self.poller.register(self.command_in, zmq.POLLIN)
+        self.poller.register(self.result_in, zmq.POLLIN)
+        _print('create sinker [{id}]'.format(id=self.id))
 
-#     # create workers
-#     for i in range(num_workers):
-#         p = Process(target=_worker, args=(task_processor,))
-#         _PROCESSES.append(p)
-#         p.start()
+    def run(self):
+        try:
+            global _TASKS
+            self.result_in.bind('inproc://{proc_name}'.format(proc_name=_WORKER_RESULT))
 
-#     try:
-#         # synchronise active workers
-#         ack_in = _CONTEXT.socket(zmq.REP)
-#         ack_in.bind('tcp://*:{port}'.format(port=_WORKER_ACK_PORT))
-#         num_active_workers = 0
-#         while num_active_workers < num_workers:
-#             ack_in.recv()
-#             ack_in.send(b'')
-#             num_active_workers += 1
+            while True:
+                socks = dict(self.poller.poll())
+                if self.command_in in socks and socks[self.command_in] == zmq.POLLIN:
+                    _print('stop() received')
+                    break
 
-#         # create _TASK_OUT socket
-#         global _TASK_OUT
-#         _TASK_OUT = _CONTEXT.socket(zmq.PUSH)
-#         _TASK_OUT.bind('tcp://*:{port}'.format(port=_TASK_PORT))
-#     except Exception as e:
-#         print('Error in start worker {error}'.format(error=e.strerror))
-#         stop()
+                if self.result_in in socks and socks[self.result_in] == zmq.POLLIN:
+                    task_msg = self.result_in.recv_json()
 
+                    task = Task(task_msg['id'], task_msg['command'], task_msg['status'])
+                    _print('sink [{id}] received result of task {task_id}'.format(id=self.id, task_id=task.id))
+                    _GLOBAL_TASK_LOCK.acquire()
+                    _TASKS[task.id] = task
+                    _GLOBAL_TASK_LOCK.release()
+                    self.result_in.send(b'')
 
-# def stop():
-#     for p in _PROCESSES:
-#         print('stop process [{pid}]'.format(pid=p.pid))
-#         p.terminate()
+        except Exception as e:
+            _print('sink [{id}] Error: {error}'.format(id=self.id, error=e.strerror))
 
-
-# def dedicate(task):
-#     '''
-#     @param task Task object
-#     '''
-#     if not _TASK_OUT:
-#         blocking_print('Error _TASK_OUT is None. start() the downloader')
-#         return
-
-#     if task.id in _TASKS:
-#             blocking_print('task: {task_id} is processed'.format(task_id=task.id))
-#     else:
-#         _TASKS[task.id] = task
-#         blocking_print('send task: {task}'.format(task=task.id))
-#         _TASK_OUT.send_json(task.__dict__)
+    def stop(self):
+        self.command_out.send('STOP')
 
 
-# def have_all__TASKS_done():
-#     all__TASKS_done = True
-#     for k, v, in _TASKS.items():
-#         if not v.is_done():
-#             all__TASKS_done = False
-#             break
-#     return all__TASKS_done
+def _sync_workers(ack_in, num_workers):
+    '''
+    synchronise active workers
+    @param ack_in worker thread ack in socket, binds to inproc://_WORKER_ACK
+    @param num_workers Number of workers
+    '''
+    num_active_workers = 0
+    while num_active_workers < num_workers:
+        _print('sync with worker {n}'.format(n=num_active_workers))
+        ack_in.recv()
+        ack_in.send(b'')
+        num_active_workers += 1
 
 
-# def print_all_tasks():
-#     print(_TASKS)
+def start(action, num_workers=3):
+    '''
+    @param action bool(Task)
+    @num_workers Number workers, default 3
+    '''
+    global _WORKING_THREADS
+
+    # bind worker ack
+    ack_in = _CONTEXT.socket(zmq.REP)
+    ack_in.bind('inproc://{proc_name}'.format(proc_name=_WORKER_ACK))
+
+    # create sink
+    sinker_thread = _SinkerThread()
+    _WORKING_THREADS.append(sinker_thread)
+    sinker_thread.start()
+
+    # create workers
+    _print('create workers')
+    for i in range(num_workers):
+        worker_thread = _WorkerThread(action=action)
+        _WORKING_THREADS.append(worker_thread)
+        worker_thread.start()
+
+    try:
+        _print('sync workers')
+        _sync_workers(ack_in, num_workers)
+
+        # create _TASK_OUT_SOCKET
+        global _TASK_OUT_SOCKET
+        _TASK_OUT_SOCKET = _CONTEXT.socket(zmq.PUSH)
+        _TASK_OUT_SOCKET.bind('inproc://{proc_name}'.format(proc_name=_WORKER_TASK))
+    except Exception as e:
+        _print('Error in start worker {error}'.format(error=e))
+        stop()
 
 
-# def main():
-#     def simple_action(task):
-#         '''
-#         @param task Task instance
-#         @return True indicating task done, False otherwise
-#         '''
-#         blocking_print('procesing task: {id}'.format(id=task.id))
-#         import random
-#         time.sleep(random.randint(1, 10))
-#         return True
-
-#     # start boss (including worker and sinker processes)
-#     start(num_workers=4, task_processor=simple_action)
-
-#     # dispatch dummy tasks
-#     for i in range(50):
-#         import random
-#         task_id = random.randint(1, 30)
-#         task = Task(task_id, {})
-#         dedicate(task)
-#         time.sleep(0.5)
-
-#     # check all tasks done before stop boss
-#     total_check = 0
-#     while not have_all__TASKS_done():
-#         blocking_print('Waiting for all _TASKS done')
-#         time.sleep(1)
-#         total_check += 1
-#         if total_check > 50:
-#             break
-
-#     # stop boss (including worker and sinker processes)
-#     stop()
-#     print_all_tasks()
+def stop():
+    '''
+    stop all working threads, including workers and sinker
+    '''
+    for t in _WORKING_THREADS:
+        _print('Stopping thread {id}'.format(id=t.id))
+        t.stop()
+        t.join()
 
 
-# if __name__ == '__main__':
-#     main()
+def assign_task(task):
+    '''
+    Assign task to the active worker
+    @param task Task object
+    '''
+    global _TASK_OUT_SOCKET
+    global _TASKS
+    if not _TASK_OUT_SOCKET:
+        _print('Error _TASK_OUT_SOCKET is None. start() the boss')
+        return
+
+    _GLOBAL_TASK_LOCK.acquire()
+    if task.id in _TASKS:
+        _print('task: {task_id} is processed'.format(task_id=task.id))
+        _GLOBAL_TASK_LOCK.release()
+    else:
+        _TASKS[task.id] = task
+        _GLOBAL_TASK_LOCK.release()
+        _print('send task: {task}'.format(task=task.id))
+        _TASK_OUT_SOCKET.send_json(task.__dict__)
+
+
+def have_all_tasks_done():
+    '''
+    Check whether all tasks done
+    '''
+    _GLOBAL_TASK_LOCK.acquire()
+    all_TASKS_done = True
+    for k, v, in _TASKS.items():
+        if not v.is_done():
+            all_TASKS_done = False
+            break
+    _GLOBAL_TASK_LOCK.release()
+    return all_TASKS_done
+
+
+def tasks():
+    return _TASKS
+
+
+def main():
+    def simple_action(task):
+        '''
+        @param task Task instance
+        @return True indicating task done, False otherwise
+        '''
+        _print('procesing task: {id}'.format(id=task.id))
+        import random
+        time.sleep(random.randint(1, 10))
+        return True
+
+    # start boss (including worker and sinker processes)
+    start(num_workers=2, action=simple_action)
+
+    # dispatch dummy tasks
+    for i in range(5):
+        import random
+        task_id = random.randint(1, 30)
+        task = Task(task_id, {})
+        assign_task(task)
+        time.sleep(0.5)
+
+    # check all tasks done before stop boss
+    total_check = 0
+    while not have_all_tasks_done():
+        _print('Waiting for all _TASKS done')
+        time.sleep(1)
+        total_check += 1
+        if total_check > 50:
+            break
+
+    # stop boss (including worker and sinker processes)
+    stop()
+
+    all_tasks = tasks()
+    print(all_tasks)
+
+
+if __name__ == '__main__':
+    main()
