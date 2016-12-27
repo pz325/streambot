@@ -4,14 +4,15 @@ boss.py
 boss is zeromq based, multi-threading Task distributing framework
 
 Interfaces:
-start()
-stop()
+    start(action, num_workers=3)
+    assign_task(task):
+    stop()
+    have_all_tasks_done():
+    tasks():
+
 
 Classes:
-Task
-
-Enum:
-TaskStatus
+    Task
 '''
 import time
 import zmq
@@ -20,8 +21,10 @@ import threading
 import logging
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('boss')
+logger.addHandler(logging.NullHandler())
 _CONTEXT = zmq.Context()
+
 
 # TODO: handle failed tasks
 
@@ -41,7 +44,7 @@ _TASKS = {}  # All tasks, key: Task.id, value: Task object
 def _print(message, block=True):
     if block:
         _GLOBAL_PRINT_LOCK.acquire()
-    print(message)
+    logger.info(message)
     if block:
         _GLOBAL_PRINT_LOCK.release()
 
@@ -256,7 +259,6 @@ def start(action, num_workers=3):
         _sync_workers(ack_in, num_workers)
 
         # create _TASK_OUT_SOCKET
-        global _TASK_OUT_SOCKET
         _TASK_OUT_SOCKET = _CONTEXT.socket(zmq.PUSH)
         _TASK_OUT_SOCKET.bind('inproc://{proc_name}'.format(proc_name=_WORKER_TASK))
     except Exception as e:
@@ -299,6 +301,7 @@ def assign_task(task):
 def have_all_tasks_done():
     '''
     Check whether all tasks done
+    @return True if all tasks done
     '''
     _GLOBAL_TASK_LOCK.acquire()
     all_TASKS_done = True
@@ -311,10 +314,23 @@ def have_all_tasks_done():
 
 
 def tasks():
+    '''
+    @return array of assigned Task instances
+    '''
     return _TASKS
 
 
-def main():
+def _example():
+    # setup logger
+    global logger
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    logger.debug('start main')
+
     def simple_action(task):
         '''
         @param task Task instance
@@ -349,8 +365,8 @@ def main():
     stop()
 
     all_tasks = tasks()
-    print(all_tasks)
+    _print(all_tasks)
 
 
 if __name__ == '__main__':
-    main()
+    _example()

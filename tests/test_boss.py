@@ -33,7 +33,6 @@ class TaskBoss(unittest.TestCase):
 
         total_check = 0
         while not boss.have_all_tasks_done():
-            boss._print('Waiting for all _TASKS done')
             time.sleep(1)
             total_check += 1
             if total_check > 10:
@@ -50,7 +49,6 @@ class TaskBoss(unittest.TestCase):
 
         total_check = 0
         while not boss.have_all_tasks_done():
-            boss._print('Waiting for all _TASKS done')
             time.sleep(1)
             total_check += 1
             if total_check > 10:
@@ -68,14 +66,12 @@ class TaskBoss(unittest.TestCase):
 
         total_check = 0
         while not boss.have_all_tasks_done():
-            boss._print('Waiting for all _TASKS failed')
             time.sleep(1)
             total_check += 1
             if total_check > 10:
                 self.fail('workers have not stpped in time')
 
         boss.stop()
-        print(boss.tasks())
         for k, v in boss.tasks().items():
             if 0 == k % 2:
                 self.assertTrue(v.is_done())
@@ -90,14 +86,12 @@ class TaskBoss(unittest.TestCase):
 
         total_check = 0
         while not boss.have_all_tasks_done():
-            boss._print('Waiting for all _TASKS failed')
             time.sleep(1)
             total_check += 1
             if total_check > 10:
                 self.fail('workers have not stpped in time')
 
         boss.stop()
-        print(boss.tasks())
         for k, v in boss.tasks().items():
             self.assertTrue(v.is_done())
 
@@ -109,7 +103,6 @@ class TaskBoss(unittest.TestCase):
 
         total_check = 0
         while not boss.have_all_tasks_done():
-            boss._print('Waiting for all _TASKS failed')
             time.sleep(1)
             total_check += 1
             if total_check > 10:
@@ -118,3 +111,23 @@ class TaskBoss(unittest.TestCase):
         boss.stop()
         for k, v in boss.tasks().items():
             self.assertTrue(v.is_failed())
+
+    def test_tasks_returns_all_assigned_tasks(self):
+        boss.start(action=done_action)
+        num_tasks = 10
+        for i in range(num_tasks):
+            task = boss.Task(i, {})
+            boss.assign_task(task)
+
+        total_check = 0
+        while not boss.have_all_tasks_done():
+            time.sleep(1)
+            total_check += 1
+            if total_check > 10:
+                self.fail('workers have not stpped in time')
+
+        boss.stop()
+        assigned_tasks = boss.tasks()
+        self.assertTrue(len(assigned_tasks), num_tasks)
+        for k, v in boss.tasks().items():
+            self.assertTrue(v.id in range(num_tasks))
