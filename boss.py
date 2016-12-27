@@ -21,12 +21,8 @@ import threading
 import logging
 
 
-logger = logging.getLogger('boss')
-logger.addHandler(logging.NullHandler())
+logger = logging.getLogger('boss.streambot')
 _CONTEXT = zmq.Context()
-
-
-# TODO: handle failed tasks
 
 
 _GLOBAL_PRINT_LOCK = threading.Lock()
@@ -44,7 +40,7 @@ _TASKS = {}  # All tasks, key: Task.id, value: Task object
 def _print(message, block=True):
     if block:
         _GLOBAL_PRINT_LOCK.acquire()
-    logger.info(message)
+    logger.debug(message)
     if block:
         _GLOBAL_PRINT_LOCK.release()
 
@@ -86,7 +82,7 @@ class _WorkerThread(threading.Thread):
     also sync to client via worker_ack_out socket, wich binds to inproc://WORKER_ACK
     also command socket, which binds to inproc://{id}
 
-    action is the Task handler: bool(Task)
+    action is the Task handler: bool(Task). This is a blocking call.
     '''
     def __init__(self, action):
         '''
@@ -139,10 +135,10 @@ class _WorkerThread(threading.Thread):
                     _print('worker [{id}] is working on {task}'.format(id=self.id, task=task.id))
 
                     if self.action(task):
-                        _print('*************set done')
+                        _print('worker [{id}]: Task done'.format(id=self.id))
                         task.set_done()
                     else:
-                        _print('*************set failed')
+                        _print('worker [{id}]: Task failed'.format(id=self.id))
                         task.set_failed()
 
                     self.result_out.send_json(task.__dict__)
@@ -322,14 +318,7 @@ def tasks():
 
 def _example():
     # setup logger
-    global logger
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    logger.debug('start main')
+    logging.basicConfig(level=logging.DEBUG)
 
     def simple_action(task):
         '''
