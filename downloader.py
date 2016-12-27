@@ -8,18 +8,19 @@ import requests
 logger = logging.getLogger('downloader.streambot')
 
 
-def _download(uri, filename):
+def _download(uri, local):
     '''
-    download from uri and save as filename
+    download from uri and save as local
     @param uri
-    @param filename
+    @param local
     @return True if download succeeds
     '''
     try:
         resp = requests.get(uri, verify=False)
         resp.raise_for_status()
-        with open(filename, 'wb') as f:
+        with open(local, 'wb') as f:
             f.write(resp.content)
+        logger.debug('{uri} downloaded and saved to {local}'.format(uri=uri, local=local))
         return True
     except requests.exceptions.RequestException as e:
         logger.error('Error: RequestException while download {uri}'.format(uri=uri))
