@@ -24,7 +24,7 @@ def _download(uri, local):
         return True
     except requests.exceptions.RequestException as e:
         logger.error('Error: RequestException while download {uri}'.format(uri=uri))
-        logger.error(e)
+        logger.exception(e)
         return False
 
 
@@ -51,7 +51,7 @@ def download(uri, local, clear_local=False):
             os.makedirs(subfolder)
     except OSError as e:
         logger.error('Error: OSError while create folder {subfolder}'.format(subfolder=subfolder))
-        logger.error(e)
+        logger.exception(e)
         return False
 
     return _download(uri, local)

@@ -7,6 +7,7 @@ import urlparse
 import logging
 import os
 import m3u8
+import time
 
 
 logger = logging.getLogger('streambot.streambot')
@@ -18,7 +19,20 @@ _OUTPUT_DIR = 'output'
 
 
 def download_task_action(task):
-    return downloader.download(task['uri'], task['local'], task['clear_local'])
+    return downloader.download(task.command['uri'], task.command['local'], task.command['clear_local'])
+
+
+def create_download_task(uri, output_dir, clear_local=False):
+    '''
+    @param uri Absolute URI
+    '''
+    if not is_full_uri(uri):
+        raise StreamBotError('{uri} is not full URI'.format(uri=uri))
+
+    url = urlparse.urlparse(uri)
+    local = os.path.join(output_dir, url.path[1:])
+    cmd = {'uri': uri, 'local': local, 'clear_local': clear_local}
+    return boss.Task(uri, cmd, 'START')
 
 
 def download_and_save_to(uri, output_dir, clear_local):
@@ -26,11 +40,14 @@ def download_and_save_to(uri, output_dir, clear_local):
     Download URI and save content to output
     e.g. URI: http://host.com/path/to/playlist.m3u8
     then local is output_dir/path/to/playlist.m3u8
-    @param uri
+    @param uri Absolute URI
     @param output_dir
     @param clear_local True indicating to clear local
     @return local
     '''
+    if not is_full_uri(uri):
+        raise StreamBotError('{uri} is not full URI'.format(uri=uri))
+
     url = urlparse.urlparse(uri)
     local = os.path.join(output_dir, url.path[1:])
     if not downloader.download(uri, local, clear_local):
@@ -58,63 +75,143 @@ class Bot():
         self.output_dir = os.path.join(os.getcwd(), _OUTPUT_DIR)
 
 
+class HLSSegment():
+    def __init__(self, uri):
+        '''
+        @param uri Absolute URI of segment
+        '''
+        self.uri = uri
+
+    def log(self):
+        logger.debug('Segment URI: {uri}'.format(uri=self.uri))
+
+
+class HLSPlaylist():
+    def __init__(self, uri):
+        '''
+        @param uri Absolute URI of playlist
+        '''
+        self.uri = uri
+        self.playlist = None
+
+    def download_and_save(self, output_dir=_OUTPUT_DIR):
+        '''
+        download and save playlist
+        also parse media playlists
+        '''
+        self.local = download_and_save_to(self.uri, output_dir, True)
+        logger.debug('stream playlist is saved as: {local}'.format(local=self.local))
+
+        with open(self.local, 'r') as f:
+            content = f.read()
+            self.playlist = m3u8.loads(content)
+
+    def is_variant(self):
+        return self.playlist.is_variant
+
+    def log(self):
+        logger.debug('Stream URI: {uri}'.format(uri=self.uri))
+        if self.playlist.is_variant:
+            media_playlists = self.parse_media_playlists()
+            for m in media_playlists:
+                logger.debug('Media playlist URI: {uri}'.format(uri=m.uri))
+        else:
+            segments = self.parse_segments()
+            logger.debug('{n} segments in the list'.format(n=len(segments)))
+
+    def parse_media_playlists(self):
+        if not self.playlist.is_variant:
+            return []
+
+        playlists = []
+        for p in self.playlist.playlists:
+            uri = p.uri if is_full_uri(p.uri) else urlparse.urljoin(self.uri, p.uri)
+            playlists.append(HLSPlaylist(uri))
+
+        for m in self.playlist.media:
+            if not m.uri:
+                continue
+            uri = m.uri if is_full_uri(p.uri) else urlparse.urljoin(self.uri, m.uri)
+            playlists.append(HLSPlaylist(uri))
+        return playlists
+
+    def parse_segments(self):
+        if self.playlist.is_variant:
+            return []
+
+        segments = []
+        for s in self.playlist.segments:
+            if s.uri.startswith('#'):
+                continue
+            if is_full_uri(s.uri):
+                segments.append(HLSSegment(s.uri))
+            else:
+                segments.append(HLSSegment(urlparse.urljoin(self.uri, s.uri)))
+        return segments
+
+
 class HLSStreamBot(Bot):
     '''
     Stream bot for HLS stream
     '''
     def __init__(self, master_playlist_uri):
         Bot.__init__(self)
-        self.master_playlist_uri = master_playlist_uri
-        logger.debug('master playlist URI: {uri}'.format(uri=self.master_playlist_uri))
+        self.master_playlist = HLSPlaylist(master_playlist_uri)
+        logger.debug('master playlist URI: {uri}'.format(uri=self.master_playlist.uri))
+        self.media_playlists = []
 
     def run(self):
         try:
             boss.start(num_workers=self.num_worker, action=download_task_action)
+
             self.get_master_playlist()
-            self.get_streams()
+            self.get_media_playlists()
+            self.get_segments()
+
+            while not boss.have_all_tasks_done():
+                logger.debug('.........Waiting for all _TASKS done')
+                time.sleep(1)
         except Exception as e:
-            logger.error(e)
+            logger.exception(e)
         finally:
             boss.stop()
 
     def get_master_playlist(self):
-        logger.debug('Get master laylist: {uri}'.format(uri=self.master_playlist_uri))
-        master_playlist_local = download_and_save_to(self.master_playlist_uri, self.output_dir, True)
-        logger.debug('master playlist is saved as: {local}'.format(local=master_playlist_local))
+        '''
+        Download and save master playlist
+        '''
+        self.master_playlist.download_and_save()
+        self.master_playlist.log()
 
-        with open(master_playlist_local, 'r') as f:
-            content = f.read()
-            self.master_playlist = m3u8.loads(content)
-
-        logger.debug('master playlist is variant: {v}'.format(v=self.master_playlist.is_variant))
-        logger.debug('strem playlists:')
-        for playlist in self.master_playlist.playlists:
-            logger.debug(playlist.uri)
-        logger.debug('media playlist:')
-        for m in self.master_playlist.media:
-            if m.uri:
-                logger.debug(m.uri)
-
-    def get_streams(self):
-        logger.debug('get streams')
+    def get_media_playlists(self):
         if self.master_playlist.is_variant:
-            # download resource from stream playlist
-            for playlist in self.master_playlist.playlists:
-                self.get_stream_segments(playlist.uri)
-
-            # download resource from media
-            for m in self.master_playlist.media:
-                if not m.uri:
-                    continue
-                self.get_stream_segments(m.uri)
+            self.media_playlists = self.master_playlist.parse_media_playlists()
         else:
-            self.get_stream_segments(self.master_playlist_uri)
+            self.media_playlists.append(self.master_playlist)
+        logger.debug('{n} playlists added'.format(n=len(self.media_playlists)))
+        for m in self.media_playlists:
+            m.download_and_save()
 
-    def get_stream_segments(self, uri):
-        if not is_full_uri(uri):
-            uri = urlparse.urljoin(self.master_playlist_uri, uri)
-        logger.debug('get segments from stream: {uri}'.format(uri=uri))
-        pass
+    def get_segments(self):
+        '''
+        Get and save segments from stream playlists
+        '''
+        # TODO: Implement a Breadth-First-Search
+        for media_playlist in self.media_playlists:
+            self.get_segments_from_playlist(media_playlist)
+
+    def get_segments_from_playlist(self, playlist):
+        '''
+        Get and save segments from a playlist
+        Assign download tasks to boss
+        @param playlist
+        '''
+        segments = playlist.parse_segments()
+        logger.debug('Download {n} segments from playlist {uri}'.format(n=len(segments), uri=playlist.uri))
+        for s in segments:
+            task = create_download_task(s.uri, self.output_dir)
+            boss.assign_task(task)
+            break
 
 
 def _hls_stream_bot_example():

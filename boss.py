@@ -25,7 +25,6 @@ logger = logging.getLogger('boss.streambot')
 _CONTEXT = zmq.Context()
 
 
-_GLOBAL_PRINT_LOCK = threading.Lock()
 _GLOBAL_TASK_LOCK = threading.Lock()
 _WORKER_TASK = 'WORKER_TASK'
 _WORKER_RESULT = 'WORKER_RESULT'
@@ -35,14 +34,6 @@ _WORKING_THREADS = []   # list of working threads
 
 _TASK_OUT_SOCKET = None  # PUSH socket for dispatching _TASKS to workers
 _TASKS = {}  # All tasks, key: Task.id, value: Task object
-
-
-def _print(message, block=True):
-    if block:
-        _GLOBAL_PRINT_LOCK.acquire()
-    logger.debug(message)
-    if block:
-        _GLOBAL_PRINT_LOCK.release()
 
 
 class Task(object):
@@ -102,7 +93,7 @@ class _WorkerThread(threading.Thread):
         self.poller.register(self.task_in, zmq.POLLIN)
 
         self.action = action
-        _print('create worker [{id}]'.format(id=self.id))
+        logger.debug('create worker [{id}]'.format(id=self.id))
 
     def run(self):
         try:
@@ -113,40 +104,41 @@ class _WorkerThread(threading.Thread):
             # sync worker to boss
             self.worker_ack_out.connect('inproc://{proc_name}'.format(proc_name=_WORKER_ACK))
             self.worker_ack_out.send(b'')
-            _print('waiting to start worker [{id}]'.format(id=self.id))
+            logger.debug('waiting to start worker [{id}]'.format(id=self.id))
             self.worker_ack_out.recv()  # blocking wait client to response, then start working process
-            _print('worker [{id}] stats'.format(id=self.id))
+            logger.debug('worker [{id}] stats'.format(id=self.id))
 
             # main working loop
             while True:
-                _print('worker [{id}] is waiting for task'.format(id=self.id))
+                logger.debug('worker [{id}] is waiting for task'.format(id=self.id))
                 socks = dict(self.poller.poll())
                 if self.command_in in socks and socks[self.command_in] == zmq.POLLIN:
-                    _print('stop() received')
+                    logger.debug('stop() received')
                     break
 
                 if self.task_in in socks and socks[self.task_in] == zmq.POLLIN:
                     task_msg = self.task_in.recv_json()
-                    _print('receive task_msg: {msg}'.format(msg=task_msg))
+                    logger.debug('receive task_msg: {msg}'.format(msg=task_msg))
                     if 'STOP' == task_msg['status']:
                         break
 
                     task = Task(task_msg['id'], task_msg['command'])
-                    _print('worker [{id}] is working on {task}'.format(id=self.id, task=task.id))
+                    logger.debug('worker [{id}] is working on {task}'.format(id=self.id, task=task.id))
 
                     if self.action(task):
-                        _print('worker [{id}]: Task done'.format(id=self.id))
+                        logger.debug('worker [{id}]: Task done'.format(id=self.id))
                         task.set_done()
                     else:
-                        _print('worker [{id}]: Task failed'.format(id=self.id))
+                        logger.debug('worker [{id}]: Task failed'.format(id=self.id))
                         task.set_failed()
 
                     self.result_out.send_json(task.__dict__)
 
-                    _print('worker [{id}] is sending out result'.format(id=self.id))
+                    logger.debug('worker [{id}] is sending out result'.format(id=self.id))
                     self.result_out.recv()
         except Exception as e:
-            _print('worker [{id}] Error: {error}'.format(id=self.id, error=e.strerror))
+            logger.error('Error in worker [{id}]'.format(id=self.id))
+            logger.exception(e)
 
     def stop(self):
         '''
@@ -176,7 +168,7 @@ class _SinkerThread(threading.Thread):
         self.poller = zmq.Poller()
         self.poller.register(self.command_in, zmq.POLLIN)
         self.poller.register(self.result_in, zmq.POLLIN)
-        _print('create sinker [{id}]'.format(id=self.id))
+        logger.debug('create sinker [{id}]'.format(id=self.id))
 
     def run(self):
         try:
@@ -186,21 +178,22 @@ class _SinkerThread(threading.Thread):
             while True:
                 socks = dict(self.poller.poll())
                 if self.command_in in socks and socks[self.command_in] == zmq.POLLIN:
-                    _print('stop() received')
+                    logger.debug('stop() received')
                     break
 
                 if self.result_in in socks and socks[self.result_in] == zmq.POLLIN:
                     task_msg = self.result_in.recv_json()
 
                     task = Task(task_msg['id'], task_msg['command'], task_msg['status'])
-                    _print('sink [{id}] received result of task {task_id}'.format(id=self.id, task_id=task.id))
+                    logger.debug('sink [{id}] received result of task {task_id}'.format(id=self.id, task_id=task.id))
                     _GLOBAL_TASK_LOCK.acquire()
                     _TASKS[task.id] = task
                     _GLOBAL_TASK_LOCK.release()
                     self.result_in.send(b'')
 
         except Exception as e:
-            _print('sink [{id}] Error: {error}'.format(id=self.id, error=e.strerror))
+            logger.error('Error in sink [{id}]'.format(id=self.id))
+            logger.exception(e)
 
     def stop(self):
         self.command_out.send('STOP')
@@ -214,7 +207,7 @@ def _sync_workers(ack_in, num_workers):
     '''
     num_active_workers = 0
     while num_active_workers < num_workers:
-        _print('sync with worker {n}'.format(n=num_active_workers))
+        logger.debug('sync with worker {n}'.format(n=num_active_workers))
         ack_in.recv()
         ack_in.send(b'')
         num_active_workers += 1
@@ -244,21 +237,22 @@ def start(action, num_workers=3):
     sinker_thread.start()
 
     # create workers
-    _print('create workers')
+    logger.debug('create workers')
     for i in range(num_workers):
         worker_thread = _WorkerThread(action=action)
         _WORKING_THREADS.append(worker_thread)
         worker_thread.start()
 
     try:
-        _print('sync workers')
+        logger.debug('sync workers')
         _sync_workers(ack_in, num_workers)
 
         # create _TASK_OUT_SOCKET
         _TASK_OUT_SOCKET = _CONTEXT.socket(zmq.PUSH)
         _TASK_OUT_SOCKET.bind('inproc://{proc_name}'.format(proc_name=_WORKER_TASK))
     except Exception as e:
-        _print('Error in start worker {error}'.format(error=e))
+        logger.error('Error in start worker')
+        logger.exception(e)
         stop()
 
 
@@ -267,7 +261,7 @@ def stop():
     stop all working threads, including workers and sinker
     '''
     for t in _WORKING_THREADS:
-        _print('Stopping thread {id}'.format(id=t.id))
+        logger.debug('Stopping thread {id}'.format(id=t.id))
         t.stop()
         t.join()
 
@@ -280,17 +274,17 @@ def assign_task(task):
     global _TASK_OUT_SOCKET
     global _TASKS
     if not _TASK_OUT_SOCKET:
-        _print('Error _TASK_OUT_SOCKET is None. start() the boss')
+        logger.error('Error _TASK_OUT_SOCKET is None. start() the boss')
         return
 
     _GLOBAL_TASK_LOCK.acquire()
     if task.id in _TASKS:
-        _print('task: {task_id} is processed'.format(task_id=task.id))
+        logger.debug('task: {task_id} is processed'.format(task_id=task.id))
         _GLOBAL_TASK_LOCK.release()
     else:
         _TASKS[task.id] = task
         _GLOBAL_TASK_LOCK.release()
-        _print('send task: {task}'.format(task=task.id))
+        logger.debug('send task: {task}'.format(task=task.id))
         _TASK_OUT_SOCKET.send_json(task.__dict__)
 
 
@@ -325,7 +319,7 @@ def _example():
         @param task Task instance
         @return True indicating task done, False otherwise
         '''
-        _print('procesing task: {id}'.format(id=task.id))
+        logger.debug('procesing task: {id}'.format(id=task.id))
         import random
         time.sleep(random.randint(1, 10))
         return True
@@ -344,7 +338,7 @@ def _example():
     # check all tasks done before stop boss
     total_check = 0
     while not have_all_tasks_done():
-        _print('Waiting for all _TASKS done')
+        logger.debug('Waiting for all _TASKS done')
         time.sleep(1)
         total_check += 1
         if total_check > 50:
@@ -354,7 +348,7 @@ def _example():
     stop()
 
     all_tasks = tasks()
-    _print(all_tasks)
+    logger.debug(all_tasks)
 
 
 if __name__ == '__main__':
