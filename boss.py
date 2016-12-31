@@ -304,8 +304,6 @@ def have_all_tasks_done():
     progress_message = '**** [boss] {num_done}/{num_total} DONE {num_failed} Failed **** \r'.format(num_done=num_done, num_total=len(tasks), num_failed=num_failed)
     sys.stdout.write(progress_message)
     sys.stdout.flush()
-
-
     all_TASKS_done = (num_pending == 0)
     _GLOBAL_TASK_LOCK.release()
     return all_TASKS_done

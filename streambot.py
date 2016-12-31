@@ -220,6 +220,8 @@ class HLSStreamBot(Bot):
         for s in segments:
             task = create_download_task(s.uri, self.output_dir)
             boss.assign_task(task)
+            if s.byterange:
+                break
 
 
 def _hls_stream_bot_example():
