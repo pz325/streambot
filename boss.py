@@ -20,6 +20,7 @@ import uuid
 import threading
 import logging
 import signal
+import sys
 
 
 logger = logging.getLogger('boss.streambot')
@@ -296,11 +297,16 @@ def have_all_tasks_done():
     @return True if all tasks done
     '''
     _GLOBAL_TASK_LOCK.acquire()
-    all_TASKS_done = True
-    for k, v in _TASKS.items():
-        if not v.is_done() and not v.is_failed():
-            all_TASKS_done = False
-            break
+    tasks = _TASKS.values()
+    num_done = len([x for x in tasks if x.is_done()])
+    num_failed = len([x for x in tasks if x.is_failed()])
+    num_pending = len(tasks) - num_done - num_failed
+    progress_message = '**** [boss] {num_done}/{num_total} DONE {num_failed} Failed **** \r'.format(num_done=num_done, num_total=len(tasks), num_failed=num_failed)
+    sys.stdout.write(progress_message)
+    sys.stdout.flush()
+
+
+    all_TASKS_done = (num_pending == 0)
     _GLOBAL_TASK_LOCK.release()
     return all_TASKS_done
 
