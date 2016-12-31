@@ -1,10 +1,7 @@
 import unittest
 import streambot
 import os
-import logging
 import shutil
-
-logging.basicConfig(level=logging.DEBUG)
 
 
 class TastStreamBot(unittest.TestCase):

@@ -161,6 +161,9 @@ class HLSStreamBot(Bot):
     Stream bot for HLS stream
     '''
     def __init__(self, master_playlist_uri):
+        '''
+        @param master_playlist_uri Absolute URI of the master playlist
+        '''
         Bot.__init__(self)
         self.master_playlist = HLSPlaylist(master_playlist_uri)
         logger.debug('master playlist URI: {uri}'.format(uri=self.master_playlist.uri))
@@ -170,7 +173,7 @@ class HLSStreamBot(Bot):
         try:
             boss.start(num_workers=self.num_worker, action=_download_task_action)
 
-            self.get_master_playlist()
+            self._get_master_playlist()
             self.get_media_playlists()
             self.get_segments()
 
@@ -182,14 +185,14 @@ class HLSStreamBot(Bot):
         finally:
             boss.stop()
 
-    def get_master_playlist(self):
+    def _get_master_playlist(self):
         '''
         Download and save master playlist
         '''
         self.master_playlist.download_and_save()
         self.master_playlist.log()
 
-    def get_media_playlists(self):
+    def _get_media_playlists(self):
         if self.master_playlist.is_variant:
             self.media_playlists = self.master_playlist.parse_media_playlists()
         else:
@@ -198,7 +201,7 @@ class HLSStreamBot(Bot):
         for m in self.media_playlists:
             m.download_and_save()
 
-    def get_segments(self):
+    def _get_segments(self):
         '''
         Get and save segments from stream playlists
         '''
@@ -206,7 +209,7 @@ class HLSStreamBot(Bot):
         for media_playlist in self.media_playlists:
             self.get_segments_from_playlist(media_playlist)
 
-    def get_segments_from_playlist(self, playlist):
+    def _get_segments_from_playlist(self, playlist):
         '''
         Get and save segments from a playlist
         Assign download tasks to boss
@@ -217,7 +220,6 @@ class HLSStreamBot(Bot):
         for s in segments:
             task = create_download_task(s.uri, self.output_dir)
             boss.assign_task(task)
-            break
 
 
 def _hls_stream_bot_example():
