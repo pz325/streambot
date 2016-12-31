@@ -19,9 +19,11 @@ import zmq
 import uuid
 import threading
 import logging
+import signal
 
 
 logger = logging.getLogger('boss.streambot')
+signal.signal(signal.SIGINT, signal.SIG_DFL)
 _CONTEXT = zmq.Context()
 
 

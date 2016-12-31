@@ -174,8 +174,8 @@ class HLSStreamBot(Bot):
             boss.start(num_workers=self.num_worker, action=_download_task_action)
 
             self._get_master_playlist()
-            self.get_media_playlists()
-            self.get_segments()
+            self._get_media_playlists()
+            self._get_segments()
 
             while not boss.have_all_tasks_done():
                 logger.debug('.........Waiting for all _TASKS done')
@@ -207,7 +207,7 @@ class HLSStreamBot(Bot):
         '''
         # TODO: Implement a Breadth-First-Search
         for media_playlist in self.media_playlists:
-            self.get_segments_from_playlist(media_playlist)
+            self._get_segments_from_playlist(media_playlist)
 
     def _get_segments_from_playlist(self, playlist):
         '''
