@@ -1,9 +1,13 @@
 import unittest
 import streambot
 import os
+import logging
+import shutil
+
+logging.basicConfig(level=logging.DEBUG)
 
 
-class TastHLSStreamBot(unittest.TestCase):
+class TastStreamBot(unittest.TestCase):
     def setUp(self):
         pass
 
@@ -43,14 +47,20 @@ class TastHLSStreamBot(unittest.TestCase):
 
     def test_download_and_save_to_error_when_uri_not_full(self):
         uri = 'asdf'
-        local = 'local'
+        output_dir = 'output_dir'
         clear_local = True
         with self.assertRaises(streambot.StreamBotError):
-            streambot.download_and_save_to(uri, local, clear_local)
+            streambot.download_and_save_to(uri, output_dir, clear_local)
+
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
 
     def test_download_and_save_to_error_when_download_fail(self):
-        uri = 'http://not.exist'
-        local = 'local'
+        uri = 'http://not.exist/a.ts'
+        output_dir = 'output_dir'
         clear_local = True
         with self.assertRaises(streambot.StreamBotError):
-            streambot.download_and_save_to(uri, local, clear_local)
+            streambot.download_and_save_to(uri, output_dir, clear_local)
+
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)

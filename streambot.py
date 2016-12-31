@@ -18,7 +18,7 @@ _TOTAL_LENGTH = 60  # second
 _OUTPUT_DIR = 'output'
 
 
-def download_task_action(task):
+def _download_task_action(task):
     return downloader.download(task.command['uri'], task.command['local'], task.command['clear_local'])
 
 
@@ -80,6 +80,9 @@ class HLSSegment():
         '''
         @param uri Absolute URI of segment
         '''
+        if not is_full_uri(uri):
+            raise StreamBotError('HLSSegment URI is not absolute: {uri}'.format(uri=uri))
+
         self.uri = uri
 
     def log(self):
@@ -91,6 +94,9 @@ class HLSPlaylist():
         '''
         @param uri Absolute URI of playlist
         '''
+        if not is_full_uri(uri):
+            raise StreamBotError('HLSPlaylist URI is not absolute: {uri}'.format(uri=uri))
+
         self.uri = uri
         self.playlist = None
 
@@ -162,7 +168,7 @@ class HLSStreamBot(Bot):
 
     def run(self):
         try:
-            boss.start(num_workers=self.num_worker, action=download_task_action)
+            boss.start(num_workers=self.num_worker, action=_download_task_action)
 
             self.get_master_playlist()
             self.get_media_playlists()
