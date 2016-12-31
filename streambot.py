@@ -1,3 +1,5 @@
+# -*- coding: UTF-8 -*-
+
 '''
 streambot.py
 '''
@@ -8,18 +10,24 @@ import logging
 import os
 import m3u8
 import time
-
+import sys
 
 logger = logging.getLogger('streambot.streambot')
 
 _NUM_WORKER = 3
-_REFRESH_INTERVAL = 5  # second
+_REFRESH_INTERVAL = None  # second
 _TOTAL_LENGTH = 60  # second
 _OUTPUT_DIR = 'output'
 
 
 def _download_task_action(task):
     return downloader.download(task.command['uri'], task.command['local'], task.command['clear_local'])
+
+
+def _get_local(uri, output_dir):
+    url = urlparse.urlparse(uri)
+    local = os.path.join(output_dir, url.path[1:])
+    return local
 
 
 def create_download_task(uri, output_dir, clear_local=False):
@@ -29,8 +37,7 @@ def create_download_task(uri, output_dir, clear_local=False):
     if not is_full_uri(uri):
         raise StreamBotError('{uri} is not full URI'.format(uri=uri))
 
-    url = urlparse.urlparse(uri)
-    local = os.path.join(output_dir, url.path[1:])
+    local = _get_local(uri, output_dir)
     cmd = {'uri': uri, 'local': local, 'clear_local': clear_local}
     return boss.Task(uri, cmd, 'START')
 
@@ -48,8 +55,7 @@ def download_and_save_to(uri, output_dir, clear_local):
     if not is_full_uri(uri):
         raise StreamBotError('{uri} is not full URI'.format(uri=uri))
 
-    url = urlparse.urlparse(uri)
-    local = os.path.join(output_dir, url.path[1:])
+    local = _get_local(uri, output_dir)
     if not downloader.download(uri, local, clear_local):
         raise StreamBotError('Failed download {uri}'.format(uri=uri))
     return local
@@ -76,7 +82,7 @@ class Bot():
 
 
 class HLSSegment():
-    def __init__(self, uri):
+    def __init__(self, uri, is_byterange):
         '''
         @param uri Absolute URI of segment
         '''
@@ -84,6 +90,7 @@ class HLSSegment():
             raise StreamBotError('HLSSegment URI is not absolute: {uri}'.format(uri=uri))
 
         self.uri = uri
+        self.is_byterange = is_byterange
 
     def log(self):
         logger.debug('Segment URI: {uri}'.format(uri=self.uri))
@@ -150,10 +157,16 @@ class HLSPlaylist():
             if s.uri.startswith('#'):
                 continue
             if is_full_uri(s.uri):
-                segments.append(HLSSegment(s.uri))
+                segments.append(HLSSegment(uri=s.uri, is_byterange=s.byterange))
             else:
-                segments.append(HLSSegment(urlparse.urljoin(self.uri, s.uri)))
+                segments.append(HLSSegment(uri=urlparse.urljoin(self.uri, s.uri), is_byterange=s.byterange))
         return segments
+
+    def is_live(self):
+        return not self.playlist.is_endlist
+
+    def target_duration(self):
+        return self.playlist.target_duration
 
 
 class HLSStreamBot(Bot):
@@ -175,15 +188,34 @@ class HLSStreamBot(Bot):
 
             self._get_master_playlist()
             self._get_media_playlists()
-            self._get_segments()
+            if self.media_playlists[0].is_live():
+                self._get_live_stream()
+            else:
+                self._get_segments()
 
             while not boss.have_all_tasks_done():
-                logger.debug('.........Waiting for all _TASKS done')
                 time.sleep(1)
+
         except Exception as e:
             logger.exception(e)
         finally:
             boss.stop()
+            self._report()
+
+    def _get_live_stream(self):
+        if not self.refresh_interval:
+            self.refresh_interval = self.media_playlists[0].target_duration() / 2
+        logger.debug('Refresh LIVE playlist at interval {interval} seconds'.format(interval=self.refresh_interval))
+        length = 0
+        while True:
+            self._get_segments()
+            time.sleep(self.refresh_interval)
+            length += self.refresh_interval
+            logger.debug('Refresh LIVE playlist for {length} seconds'.format(length=length))
+            if length > self.total_length:
+                break
+            self._get_master_playlist()
+            self._get_media_playlists()
 
     def _get_master_playlist(self):
         '''
@@ -220,17 +252,23 @@ class HLSStreamBot(Bot):
         for s in segments:
             task = create_download_task(s.uri, self.output_dir)
             boss.assign_task(task)
-            if s.byterange:
+            if s.is_byterange:
                 break
 
-
-def _hls_stream_bot_example():
-    logging.basicConfig(level=logging.DEBUG)
-    master_stream_uri = r'http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8'
-    hls_stream_bot = HLSStreamBot(master_stream_uri)
-    hls_stream_bot.run()
-    pass
-
-
-if __name__ == '__main__':
-    _hls_stream_bot_example()
+    def _report(self):
+        # check master playlist
+        master_playlist_downloaded = os.path.exists(_get_local(self.master_playlist.uri, self.output_dir))
+        mark = 'DONE' if master_playlist_downloaded else 'FAILED'
+        sys.stdout.write('[{mark}] Master playlist {uri} \n'.format(mark=mark, uri=self.master_playlist.uri))
+        # check media playlists
+        for p in self.media_playlists:
+            media_playlist_downloaded = os.path.exists(_get_local(p.uri, self.output_dir))
+            mark = 'DONE' if media_playlist_downloaded else 'FAILED'
+            sys.stdout.write('[{mark}] Media playlist {uri} \n'.format(mark=mark, uri=p.uri))
+            segments = p.parse_segments()
+            num_segments_downloaded = 0
+            for s in segments:
+                if os.path.exists(_get_local(s.uri, self.output_dir)):
+                    num_segments_downloaded += 1
+            sys.stdout.write('    [{num_downloaded}/{num_total}] Segments downloaded \n'.format(num_downloaded=num_segments_downloaded, num_total=len(segments)))
+        sys.stdout.flush()

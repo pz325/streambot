@@ -1,3 +1,5 @@
+# -*- coding: UTF-8 -*-
+
 '''
 hls_clone tool
 '''
@@ -29,4 +31,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-# python hls_clone.py -u http://http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8 -v
+# python hls_clone.py -u http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8 -v

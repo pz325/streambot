@@ -52,3 +52,11 @@ class TastHLSPlaylist(unittest.TestCase):
         self.media_playlist.download_and_save(self.output_dir)
         segments = self.media_playlist.parse_segments()
         self.assertEqual(len(segments), 181)
+
+    def test_media_playlist_is_live(self):
+        self.media_playlist.download_and_save(self.output_dir)
+        self.assertFalse(self.media_playlist.is_live())
+
+    def test_media_playlist_target_duration(self):
+        self.media_playlist.download_and_save(self.output_dir)
+        self.assertEqual(self.media_playlist.target_duration(), 11)
