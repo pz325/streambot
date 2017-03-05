@@ -12,6 +12,7 @@ def parse_argument():
     parser = argparse.ArgumentParser()
     parser.add_argument('--uri', '-u', required=True, help='Master playlist URI')
     parser.add_argument('--output_dir', '-o', help='output_dir. Default is output_dir')
+    parser.add_argument('--total_length', '-l', type=int, help='Total length of streams, in seconds, for downloading LIVE streams')
     parser.add_argument('--verbose', '-v', help="increase output verbosity", action="store_true")
     args = parser.parse_args()
     return args
@@ -25,6 +26,9 @@ def main():
     hls_stream_bot = streambot.HLSStreamBot(args.uri)
     if args.output_dir:
         hls_stream_bot.output_dir = args.output_dir
+
+    if args.total_length:
+        hls_stream_bot.total_length = args.total_length
 
     hls_stream_bot.run()
 
