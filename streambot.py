@@ -11,6 +11,8 @@ import os
 import m3u8
 import time
 import sys
+from mpegdash.parser import MPEGDASHParser
+
 
 logger = logging.getLogger('streambot.streambot')
 
@@ -272,3 +274,30 @@ class HLSStreamBot(Bot):
                     num_segments_downloaded += 1
             sys.stdout.write('    [{num_downloaded}/{num_total}] Segments downloaded \n'.format(num_downloaded=num_segments_downloaded, num_total=len(segments)))
         sys.stdout.flush()
+
+
+class DASHPlaylist():
+    def __init__(self, uri):
+        '''
+        @param uri Absolute URI of playlist
+        '''
+        if not is_full_uri(uri):
+            raise StreamBotError('DASHPlaylist URI is not absolute: {uri}'.format(uri=uri))
+
+        self.uri = uri
+        self.playlist = None
+
+    def download_and_save(self, output_dir=_OUTPUT_DIR):
+        '''
+        download and save playlist
+        also parse media playlists
+        '''
+        self.local = download_and_save_to(self.uri, output_dir, True)
+        logger.debug('stream playlist is saved as: {local}'.format(local=self.local))
+
+        with open(self.local, 'r') as f:
+            content = f.read()
+            self.playlist = MPEGDASHParser.parse(content)
+
+    def is_live(self):
+        return 'static' != self.playlist.type
