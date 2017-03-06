@@ -1,5 +1,5 @@
 import unittest
-import streambot
+import hls_streambot
 import os
 
 

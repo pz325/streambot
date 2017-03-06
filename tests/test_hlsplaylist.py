@@ -1,15 +1,17 @@
 import unittest
-import streambot
 import os
 import shutil
+
+import streambot
+import hls_streambot
 
 
 class TastHLSPlaylist(unittest.TestCase):
     def setUp(self):
         self.master_playlist_uri = r'https://devimages.apple.com.edgekey.net/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8'
         self.media_playlist_uri = r'https://devimages.apple.com.edgekey.net/streaming/examples/bipbop_16x9/gear1/prog_index.m3u8'
-        self.master_playlist = streambot.HLSPlaylist(self.master_playlist_uri)
-        self.media_playlist = streambot.HLSPlaylist(self.media_playlist_uri)
+        self.master_playlist = hls_streambot.HLSPlaylist(self.master_playlist_uri)
+        self.media_playlist = hls_streambot.HLSPlaylist(self.media_playlist_uri)
         self.output_dir = 'output_dir'
 
     def tearDown(self):
@@ -23,7 +25,7 @@ class TastHLSPlaylist(unittest.TestCase):
     def test_consturctor_error_when_uri_is_not_full(self):
         uri = 'asdf'
         with self.assertRaises(streambot.StreamBotError):
-            streambot.HLSPlaylist(uri)
+            hls_streambot.HLSPlaylist(uri)
 
     def test_master_playlist_is_variant_true(self):
         self.master_playlist.download_and_save(self.output_dir)
