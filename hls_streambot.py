@@ -191,7 +191,11 @@ class HLSStreamBot(streambot.Bot):
                 break
 
     def _report(self):
-        # check master playlist
+        '''
+        check master playlist
+
+        todo: cover LIVE case
+        '''
         master_playlist_downloaded = os.path.exists(streambot._get_local(self.master_playlist.uri, self.output_dir))
         mark = 'DONE' if master_playlist_downloaded else 'FAILED'
         sys.stdout.write('[{mark}] Master playlist {uri} \n'.format(mark=mark, uri=self.master_playlist.uri))

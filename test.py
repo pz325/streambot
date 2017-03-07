@@ -2,6 +2,9 @@ from mpegdash.parser import MPEGDASHParser
 
 mpd_url = 'http://dash.akamaized.net/dash264/TestCases/1a/netflix/exMPD_BIP_TC1.mpd'
 mpd = MPEGDASHParser.parse(mpd_url)
+print('==== MPD ====')
+print(mpd.__dict__)
+print(mpd.base_urls[0].__dict__)
 for p in mpd.periods:
     print('==== Period ====')
     print(p.__dict__)
